@@ -51,31 +51,42 @@ struct DefaultEpilogueTensorOpDequant
                                      PermuteDLayout> {
   using OutputOp = OutputOp_;
   using DefaultEpilogueTensorOp =
-      DefaultEpilogueTensorOp<Shape_, WarpMmaTensorOp_, PartitionsK, OutputOp_,
-                              ElementsPerAccess, ScatterD, PermuteDLayout>;
+      DefaultEpilogueTensorOp<Shape_,
+                              WarpMmaTensorOp_,
+                              PartitionsK,
+                              OutputOp_,
+                              ElementsPerAccess,
+                              ScatterD,
+                              PermuteDLayout>;
+
+  /* using OutputTileIterator2 =
+      cutlass::epilogue::threadblock::InterleavedConvPredicatedTileIterator<
+          DefaultEpilogueTensorOp::OutputTileThreadMap,
+          cutlass::bfloat16_t,
+          InterleavedK>; */
   using RowVecIterator =
       cutlass::epilogue::threadblock::symmetric::PredicatedVRowIterator<
-          typename DefaultEpilogueTensorOp::OutputTileThreadMap,
-          typename DefaultEpilogueTensorOp::ElementOutput, ScatterD,
-          PermuteDLayout, DefaultEpilogueTensorOp::UseCUDAStore>;
+                            typename DefaultEpilogueTensorOp::OutputTileThreadMap,
+                            cutlass::bfloat16_t,
+                            ScatterD,
+                            PermuteDLayout,
+                            DefaultEpilogueTensorOp::UseCUDAStore>;
   using ColVecIterator =
       cutlass::epilogue::threadblock::symmetric::PredicatedVColIterator<
           typename DefaultEpilogueTensorOp::OutputTileThreadMap,
-          typename DefaultEpilogueTensorOp::ElementOutput, ScatterD,
+          cutlass::bfloat16_t, ScatterD,
           PermuteDLayout, DefaultEpilogueTensorOp::UseCUDAStore>;
 
     using RowVecAddIterator =
       cutlass::epilogue::threadblock::symmetric::PredicatedVRowIterator<
           typename DefaultEpilogueTensorOp::OutputTileThreadMap,
-          float, ScatterD,
+          int32_t, ScatterD, //FIXME:
           PermuteDLayout, DefaultEpilogueTensorOp::UseCUDAStore>;
     using ColVecAddIterator =
       cutlass::epilogue::threadblock::symmetric::PredicatedVColIterator<
           typename DefaultEpilogueTensorOp::OutputTileThreadMap,
-          float, ScatterD,
+          int32_t, ScatterD, //FIXME:
           PermuteDLayout, DefaultEpilogueTensorOp::UseCUDAStore>;
-
-  //FIXME: add new iterators for int32
   using Epilogue = cutlass::epilogue::threadblock::symmetric::EpilogueDequant<
       typename DefaultEpilogueTensorOp::Shape,
       typename DefaultEpilogueTensorOp::WarpMmaTensorOp,

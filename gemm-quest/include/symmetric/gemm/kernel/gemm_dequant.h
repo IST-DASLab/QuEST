@@ -117,7 +117,8 @@ struct GemmDequant {
            typename Epilogue::RowVecAddIterator::TensorRef ref_vec_a_add,
            typename Epilogue::ColVecAddIterator::TensorRef ref_vec_b_add,
            typename OutputOp::Params output_op = typename OutputOp::Params(),
-           int *workspace = nullptr, int const *gather_A_indices = nullptr,
+           int *workspace = nullptr,
+           int const *gather_A_indices = nullptr,
            int const *gather_B_indices = nullptr,
            int const *scatter_D_indices = nullptr)
         : problem_size(problem_size),
