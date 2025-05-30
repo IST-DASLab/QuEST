@@ -58,6 +58,10 @@ template <
     typename ElementC_,
     /// Layout type for C and D matrix operands
     typename LayoutC_,
+    ///
+    typename ElementOut_,
+    ///
+    typename LayoutOut_,
     /// Element type for internal accumulation
     typename ElementAccumulator,
     /// Operator class tag

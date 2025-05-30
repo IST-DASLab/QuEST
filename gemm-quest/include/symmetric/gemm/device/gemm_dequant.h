@@ -67,6 +67,10 @@ template <
     typename ElementC_,
     /// Layout type for C and D matrix operands
     typename LayoutC_,
+    ///
+    typename ElementOut_,
+    ///
+    typename LayoutOut_,
     /// Element type for internal accumulation
     typename ElementAccumulator_ = ElementC_,
     /// Operator class tag
@@ -88,12 +92,13 @@ template <
     /// Epilogue output operator
     typename EpilogueOutputOp_ =
         cutlass::epilogue::thread::symmetric::LinearCombinationDequant<
-            ElementC_,
+            ElementOut_, //RLC:
             128 / cutlass::sizeof_bits<ElementC_>::value,
             ElementAccumulator_,
             ElementC_,
             cutlass::epilogue::thread::symmetric::MyScaleType::Dequantize,
-            cutlass::FloatRoundStyle::round_to_nearest, ElementC_>,
+            cutlass::FloatRoundStyle::round_to_nearest,
+            ElementC_>,
     /// Threadblock-level swizzling operator
     typename ThreadblockSwizzle_ =
         typename threadblock::GemmIdentityThreadblockSwizzle<>,
@@ -110,7 +115,7 @@ template <
         DefaultGemmConfiguration<OperatorClass_, ArchTag_, ElementA_, ElementB_,
                                  ElementC_, ElementAccumulator_>::kAlignmentB,
     /// If true, kernel supports split-K with serial reduction
-    bool SplitKSerial = false, //FIXME:?
+    bool SplitKSerial = false,
     /// Operation performed by GEMM
     typename Operator_ = typename DefaultGemmConfiguration<
         OperatorClass_, ArchTag_, ElementA_, ElementB_, ElementC_,
@@ -133,8 +138,10 @@ class GemmDequant {
   using TensorRefB = TensorRef<ElementB const, LayoutB>;
   using ElementC = ElementC_;
   using LayoutC = LayoutC_;
-  using TensorRefC = TensorRef<ElementC const, LayoutC>;
-  using TensorRefD = TensorRef<ElementC, LayoutC>;
+  using ElementOut = ElementOut_;
+  using LayoutOut = LayoutOut_;
+  using TensorRefC = TensorRef<ElementOut const, LayoutOut>;
+  using TensorRefD = TensorRef<ElementOut, LayoutOut>;
   using ElementAccumulator = ElementAccumulator_;
   using OperatorClass = OperatorClass_;
   using ArchTag = ArchTag_;
@@ -155,7 +162,7 @@ class GemmDequant {
   /// Define the kernel
   using GemmKernel = typename kernel::symmetric::DefaultGemmDequant<
       ElementA, LayoutA, kAlignmentA, ElementB, LayoutB, kAlignmentB, ElementC,
-      LayoutC, ElementAccumulator, OperatorClass, ArchTag, ThreadblockShape,
+      LayoutC, ElementOut, LayoutOut, ElementAccumulator, OperatorClass, ArchTag, ThreadblockShape,
       WarpShape, InstructionShape, EpilogueOutputOp, ThreadblockSwizzle,
       kStages, kSplitKSerial, Operator, SharedMemoryClearOption::kNone, GatherA,
       GatherB, ScatterD, PermuteDLayout>::GemmKernel;
@@ -169,12 +176,12 @@ class GemmDequant {
     GemmCoord problem_size;
     TensorRef<ElementA const, LayoutA> ref_A;
     TensorRef<ElementB const, LayoutB> ref_B;
-    TensorRef<ElementC const, LayoutC> ref_C;
-    TensorRef<ElementC, LayoutC> ref_D;
-    TensorRef<ElementC const, LayoutC> ref_row_vec;
-    TensorRef<ElementC const, LayoutC> ref_col_vec;
-    TensorRef<float const, LayoutC> ref_vec_a_add;
-    TensorRef<float const, LayoutC> ref_vec_b_add;
+    TensorRef<ElementOut const, LayoutOut> ref_C;
+    TensorRef<ElementOut, LayoutOut> ref_D;
+    TensorRef<cutlass::bfloat16_t const, LayoutC> ref_row_vec; //
+    TensorRef<cutlass::bfloat16_t const, LayoutC> ref_col_vec;
+    TensorRef<int32_t const, LayoutC> ref_vec_a_add; // FIXME:
+    TensorRef<int32_t const, LayoutC> ref_vec_b_add; //FIXME:
     typename EpilogueOutputOp::Params epilogue;
     int split_k_slices;
     // For gather+scatter operations
@@ -195,12 +202,12 @@ class GemmDequant {
     Arguments(GemmCoord problem_size_,
               TensorRef<ElementA const, LayoutA> ref_A_,
               TensorRef<ElementB const, LayoutB> ref_B_,
-              TensorRef<ElementC const, LayoutC> ref_C_,
-              TensorRef<ElementC, LayoutC> ref_D_,
-              TensorRef<ElementC const, LayoutC> ref_row_vec_,
-              TensorRef<ElementC const, LayoutC> ref_col_vec_,
-              TensorRef<float const, LayoutC> ref_vec_a_add_,
-              TensorRef<float const, LayoutC> ref_vec_b_add_,
+              TensorRef<ElementOut const, LayoutOut> ref_C_,
+              TensorRef<ElementOut, LayoutOut> ref_D_,
+              TensorRef<cutlass::bfloat16_t const, LayoutC> ref_row_vec_,
+              TensorRef<cutlass::bfloat16_t const, LayoutC> ref_col_vec_,
+              TensorRef<int32_t const, LayoutC> ref_vec_a_add_, //FIXME:
+              TensorRef<int32_t const, LayoutC> ref_vec_b_add_, //FIXME:
               typename EpilogueOutputOp::Params epilogue_ =
                   typename EpilogueOutputOp::Params(),
               int split_k_slices = 1, int const *gather_A_indices_ = nullptr,
@@ -236,7 +243,7 @@ class GemmDequant {
       return Status::kErrorInvalidProblem;
     }
 
-    Status status = GemmKernel::can_implement(
+    /* Status status = GemmKernel::can_implement(
         args.problem_size, args.ref_A.non_const_ref(),
         args.ref_B.non_const_ref(), args.ref_C.non_const_ref(), args.ref_D,
         args.ref_row_vec.non_const_ref(), args.ref_col_vec.non_const_ref(),
@@ -244,7 +251,7 @@ class GemmDequant {
 
     if (status != Status::kSuccess) {
       return status;
-    }
+    } */
 
     return Status::kSuccess;
   }

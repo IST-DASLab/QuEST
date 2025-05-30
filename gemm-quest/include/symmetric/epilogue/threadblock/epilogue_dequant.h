@@ -159,9 +159,14 @@ class EpilogueDequant
   using ConstTensorRef = typename OutputTileIterator::ConstTensorRef;
 
   /// Vector type used by the global output iterator
-  using OutputAccessType = Array<typename OutputTileIterator::Element,
+  using OutputAccessType = Array<ElementOutput,
                                  OutputTileIterator::kElementsPerAccess>;
-  using OutputAddAccessType = Array<float,
+
+  using OutputGemmAccessType = Array<cutlass::half_t,
+                                 OutputTileIterator::kElementsPerAccess>;
+  using OutputAccessType2 = Array<cutlass::bfloat16_t,
+                                 OutputTileIterator::kElementsPerAccess>;
+  using OutputAddAccessType = Array<int32_t, //FIXME:
                                  OutputTileIterator::kElementsPerAccess>;
 
   /// Vector type used by the shared output iterator
@@ -217,6 +222,7 @@ class EpilogueDequant
         typename ColVecIterator::Fragment const &col_vec_fragment,
         typename RowVecAddIterator::Fragment const &vec_a_add_fragment,
         typename ColVecAddIterator::Fragment const &vec_b_add_fragment) {
+
       OutputAccessType *output_frag_ptr =
           reinterpret_cast<OutputAccessType *>(&output_fragment);
 
@@ -224,14 +230,14 @@ class EpilogueDequant
           reinterpret_cast<AccumulatorAccessType const *>(
               &aligned_accum_fragment);
 
-      OutputAccessType const *source_frag_ptr =
-          reinterpret_cast<OutputAccessType const *>(&source_fragment);
+      OutputGemmAccessType const *source_frag_ptr =
+          reinterpret_cast<OutputGemmAccessType const *>(&source_fragment);
 
-      OutputAccessType const *row_vec_frag_ptr =
-          reinterpret_cast<OutputAccessType const *>(&row_vec_fragment);
+      OutputAccessType2 const *row_vec_frag_ptr =
+          reinterpret_cast<OutputAccessType2 const *>(&row_vec_fragment);
 
-      OutputAccessType const *col_vec_frag_ptr =
-          reinterpret_cast<OutputAccessType const *>(&col_vec_fragment);
+      OutputAccessType2 const *col_vec_frag_ptr =
+          reinterpret_cast<OutputAccessType2 const *>(&col_vec_fragment);
 
       OutputAddAccessType const *vec_a_add_frag_ptr =
           reinterpret_cast<OutputAddAccessType const *>(&vec_a_add_fragment);

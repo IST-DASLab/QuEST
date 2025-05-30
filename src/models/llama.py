@@ -43,6 +43,7 @@ def apply_rotary_emb(q, k, freqs_cis):
     # q, k: (B, T, nh, hs)
     # freq_cis: (T, hs)
     # return: (B, T, nh, hs), (B, T, nh, hs)
+    orig_dtype = q.dtype
     q = q.float().reshape(*q.shape[:-1], -1, 2)
     k = k.float().reshape(*k.shape[:-1], -1, 2)
 
@@ -58,7 +59,7 @@ def apply_rotary_emb(q, k, freqs_cis):
     q_out = torch.stack((q_cos, q_sin), dim=-1).reshape(q.shape).flatten(3)
     k_out = torch.stack((k_cos, k_sin), dim=-1).reshape(k.shape).flatten(3)
 
-    return q_out, k_out
+    return q_out.to(orig_dtype), k_out.to(orig_dtype)
 
 
 class RMSNorm(nn.Module):
@@ -250,17 +251,19 @@ class Llama(GPTBase):
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
+            if not get_logits:
+                logits = None
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             if all_logits:
                 logits = self.lm_head(x)
-            else:
+            elif get_logits:
                 logits = self.lm_head(
                     x[:, [-1], :]
                 )  # note: using list [-1] to preserve the time dim
+            else:
+                logits = None
             loss = None
-
-        logits = logits if get_logits else None
 
         return {
             "logits": logits,

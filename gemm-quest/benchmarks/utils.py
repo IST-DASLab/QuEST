@@ -1,17 +1,20 @@
 import time
 
 import torch
+from torch import nn
+import torch.nn.functional as F
 import triton
 from triton import language as tl
 
 from fast_hadamard_transform import hadamard_transform
 
-# import quest  # TODO: we always use the triton backend!
-import quik as quik_new
+import quest
 
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 torch.set_float32_matmul_precision('highest')
+
+HADAMARD_MATRIX = hadamard_transform(x=torch.eye(128, dtype=torch.bfloat16, device="cuda"), scale=128**-0.5)
 
 
 def preprocess_weight(
@@ -63,7 +66,6 @@ def linear_forward(
         _c: torch.Tensor = None,
         use_hadamard: bool = False,
         backend: str = 'triton',
-        debug_mode: bool = True,
 ) -> torch.Tensor:
     """
     Compute out = activation @ weight.t() in quantized mode
@@ -85,7 +87,7 @@ def linear_forward(
     device: torch.device = activation.device
 
     if use_hadamard:
-        activation: torch.Tensor = hadamard_transform(x=activation.unflatten(dim=-1, sizes=(-1, 128)), scale=2. ** -3.5).flatten(start_dim=-2)  # fp, (M, K)
+        activation: torch.Tensor = F.linear(activation.view(-1, 128), HADAMARD_MATRIX).view_as(activation)  # fp, (M, K)
 
     if out is None:
         out: torch.Tensor = torch.empty(M, N, dtype=dtype, device=device)  # fp, (M, N)
@@ -95,9 +97,8 @@ def linear_forward(
     find_scale_int4(x=activation, scale=a_scale, backend=backend)  # fp, (M, 1)
     if w_meta_e is None:
         a_int_row_sum: torch.Tensor = torch.empty(M, 1, dtype=torch.int32, device=device) if _a_int_row_sum is None else _a_int_row_sum  # int32, (M, 1)
-        c: torch.Tensor = torch.empty(M, N, dtype=torch.int32, device=device) if _c is None else _c  # int32, (M, N)
         quantize_int4(x=activation, scale=a_scale, x_int=None, x_int_packed=a_int_packed, x_int_row_sum=a_int_row_sum, do_dequantize=False, backend=backend)
-        fused_matmul_dequantize_int4_bf16(mat_a=a_int_packed, mat_b=w_int_packed, vec_a_add=a_int_row_sum, vec_a_mul=a_scale, vec_b_add=w_add, vec_b_mul=w_scale, _mat_c=c, mat_d=out, debug_mode=debug_mode)
+        fused_matmul_dequantize_int4_bf16(mat_a=a_int_packed, mat_b=w_int_packed, vec_a_add=a_int_row_sum, vec_b_add=w_add, vec_a_mul=a_scale, vec_b_mul=w_scale, mat_d=out, _mat_c=None, debug_mode=False)  # fp, (M, N)
     else:
         ct: torch.Tensor = torch.empty(N, M, dtype=torch.int32, device=device)  # int32, (N, M)
         c1t: torch.Tensor = torch.empty(N, M, dtype=torch.int32, device=device)  # int32, (N, M)
@@ -575,34 +576,14 @@ def fused_matmul_dequantize_int4_bf16(
     """
     M, N = mat_a.size(0), mat_b.size(0)
     device: torch.device = mat_a.device
-    mat_c: torch.Tensor = torch.empty(M, N, dtype=torch.int32, device=device) if _mat_c is None else _mat_c  # int32, (M, N)
     if mat_d is None:
         mat_d: torch.Tensor = torch.empty(M, N, dtype=vec_a_mul.dtype, device=device)  # fp, (M, N)
     if debug_mode:
+        mat_c: torch.Tensor = torch.empty(M, N, dtype=torch.int32, device=device) if _mat_c is None else _mat_c  # int32, (M, N)
         quest.matmul_int4_int4t_int32(mat_a=mat_a, mat_b=mat_b, out=mat_c)  # int32, (M, N)
         quest.add_mul_vv(vec_a_add=vec_a_add, vec_a_mul=vec_a_mul, vec_b_add=vec_b_add, vec_b_mul=vec_b_mul, mat_c=mat_c, mat_d=mat_d)  # fp, (M, N)
     else:
-        # mat_d_fp16 = torch.empty(M, N, dtype=torch.float16, device=device)  # fp16, (M, N)
-        # quik_new.symmetric.int4FusedDequantize(
-        #     mat_a,
-        #     mat_b,
-        #     vec_a_mul.to(dtype=torch.float16),
-        #     vec_b_mul.to(dtype=torch.float16),
-        #     vec_b_add.to(dtype=torch.float32),
-        #     vec_a_add.to(dtype=torch.float32),
-        #     mat_d_fp16,
-        # )  # fp16, (M, N)
-        # mat_d.copy_(mat_d_fp16)  # fp, (M, N)
-        # TODO: fix the dtype
-        quik_new.symmetric.int4FusedDequantize(
-            mat_a,
-            mat_b,
-            vec_a_mul,
-            vec_b_mul,
-            vec_b_add,
-            vec_a_add,
-            mat_d,
-        )  # fp, (M, N)
+        quest.fused_matmul_dequantize_int4_int4t_bf16(mat_a=mat_a, mat_b=mat_b, vec_a_add=vec_a_add, vec_b_add=vec_b_add, vec_a_mul=vec_a_mul, vec_b_mul=vec_b_mul, out=mat_d)  # fp, (M, N)
     return mat_d  # fp, (M, N)
 
 
@@ -736,20 +717,7 @@ def _unit_test(M: int = 32 * 5, K: int = 256 * 3, N: int = 32 * 7) -> None:
     mmm_sp = linear_forward(activation, *preprocess_weight(weight=weight, use_sparse=True, use_hadamard=False, backend='triton'), use_hadamard=False, backend='triton')  # fp, (M, N)
     assert mmm_sp.equal(m_sp_ref.to(dtype=dtype))
 
-    # mmm_fp16 = torch.empty(M, N, dtype=torch.float16, device=device)
-    # _ = quik_new.symmetric.int4FusedDequantize(
-    #     a_int_packed,
-    #     w_int_packed,
-    #     a_scale.to(dtype=torch.float16),
-    #     w_scale.to(dtype=torch.float16),
-    #     w_add.to(dtype=torch.float32),
-    #     a_int_row_sum.to(dtype=torch.float32),
-    #     mmm_fp16,
-    # )  # fp16, (M, N)
-    # assert mmm_fp16.equal(m_ref.to(dtype=mmm_fp16.dtype))
-
     try:
-        raise ImportError
         import quik
     except ImportError:
         print('Skip quik.')
@@ -814,35 +782,6 @@ def _unit_test(M: int = 32 * 5, K: int = 256 * 3, N: int = 32 * 7) -> None:
     graph.replay()
     c = graph_tensors['c'].clone()
     assert c.equal(c_ref)
-
-    # graph: torch.cuda.CUDAGraph = torch.cuda.CUDAGraph()
-    # s: torch.cuda.Stream = torch.cuda.Stream()
-    # s.wait_stream(torch.cuda.current_stream())
-    # graph_tensors: dict[str, torch.Tensor] = {
-    #     'a_int_packed': torch.empty(M, K // 2, dtype=torch.uint8, device=device),
-    #     'w_int_packed': torch.empty(N, K // 2, dtype=torch.uint8, device=device),
-    #     'a_scale': torch.empty(M, 1, dtype=torch.float16, device=device),
-    #     'w_scale': torch.empty(N, 1, dtype=torch.float16, device=device),
-    #     'w_add': torch.empty(N, 1, dtype=torch.float32, device=device),
-    #     'a_int_row_sum': torch.empty(M, 1, dtype=torch.float32, device=device),
-    #     'out': torch.empty(M, N, dtype=torch.float16, device=device),
-    # }
-    # with torch.cuda.stream(s):
-    #     n_warmups: int = 5
-    #     for _ in range(n_warmups):
-    #         quik_new.symmetric.int4FusedDequantize(*graph_tensors.values())
-    # torch.cuda.current_stream().wait_stream(s)
-    # with torch.cuda.graph(graph):
-    #     quik_new.symmetric.int4FusedDequantize(*graph_tensors.values())  # fp16, (M, N)
-    # graph_tensors['a_int_packed'].copy_(a_int_packed)
-    # graph_tensors['w_int_packed'].copy_(w_int_packed)
-    # graph_tensors['a_scale'].copy_(a_scale)
-    # graph_tensors['w_scale'].copy_(w_scale)
-    # graph_tensors['w_add'].copy_(w_add)
-    # graph_tensors['a_int_row_sum'].copy_(a_int_row_sum)
-    # graph.replay()
-    # mmm_fp16 = graph_tensors['out'].clone()
-    # assert mmm_fp16.equal(m_ref.to(dtype=mmm_fp16.dtype))
 
     print('Unit Test OK!')
 
@@ -941,7 +880,6 @@ def _basic_benchmark(M: int = 64, K: int = 2048, N: int = 2048) -> None:
     print('matmul_sp_quest', t * 1e6, sep='\t')
 
     try:
-        raise ImportError
         import quik
     except ImportError:
         print('Skip quik.')

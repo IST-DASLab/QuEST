@@ -58,7 +58,9 @@ struct MyScaleType {
 };
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <typename ElementOutput_, int Count, typename ElementAccumulator_,
+template <typename ElementOutput_,
+          int Count,
+          typename ElementAccumulator_,
           typename ElementCompute_ = cutlass::half_t,
           MyScaleType::Kind Scale = MyScaleType::Dequantize,
           FloatRoundStyle Round = FloatRoundStyle::round_to_nearest,
@@ -69,15 +71,16 @@ class LinearCombinationDequant {
   using ElementSource = ElementSource_;
   using ElementAccumulator = ElementAccumulator_;
   using ElementCompute = ElementCompute_;
-  using ElementC = ElementSource_;
-  using ElementD = ElementOutput_;
+  //using ElementC = ElementSource_;
+  //using ElementD = ElementOutput_;
 
   static int const kCount = Count;
   static const MyScaleType::Kind kScale = MyScaleType::Dequantize;
 
   using FragmentOutput = Array<ElementOutput, kCount>;
   using FragmentSource = Array<ElementSource, kCount>;
-  using FragmentAddSource = Array<float, kCount>;
+  using FragmentMultSource = Array<cutlass::bfloat16_t, kCount>;
+  using FragmentAddSource = Array<int32_t, kCount>;
   using FragmentAccumulator = Array<ElementAccumulator, kCount>;
   using FragmentCompute = Array<ElementCompute, kCount>;
 
@@ -119,49 +122,66 @@ class LinearCombinationDequant {
   CUTLASS_HOST_DEVICE
   FragmentOutput operator()(FragmentAccumulator const &accumulator,
                             FragmentSource const &source,
-                            FragmentSource const &row_vec_alpha,
-                            FragmentSource const &col_vec_alpha,
+                            FragmentMultSource const &row_vec_alpha,
+                            FragmentMultSource const &col_vec_alpha,
                             FragmentAddSource const &vec_a_add_alpha,
                             FragmentAddSource const &vec_b_add_alpha) const {
-    NumericArrayConverter<ElementCompute, ElementSource, kCount, Round>
-        source_converter;
-    NumericArrayConverter<cutlass::tfloat32_t, float, kCount, Round>
-        source_add_converter;
+    //NumericArrayConverter<cutlass::bfloat16_t, cutlass::bfloat16_t, kCount, Round>
+    //    source_converter;
+    //NumericArrayConverter<int32_t, int32_t, kCount, Round>
+    //    source_add_converter;
     NumericArrayConverter<ElementCompute, ElementAccumulator, kCount, Round>
         accumulator_converter;
 
-    NumericArrayConverter<ElementOutput, ElementCompute, kCount, Round>
-        destination_converter;
+    //NumericArrayConverter<ElementOutput, ElementCompute, kCount, Round>
+    //    destination_converter;
 
-    FragmentCompute converted_source = source_converter(source);
-    FragmentCompute converted_row_vec_alpha = source_converter(row_vec_alpha);
-    FragmentCompute converted_col_vec_alpha = source_converter(col_vec_alpha);
+    //FragmentCompute converted_source = source_converter(source);
+    //FragmentCompute converted_row_vec_alpha = source_converter(row_vec_alpha);
+    //FragmentCompute converted_col_vec_alpha = source_converter(col_vec_alpha);
     //FragmentCompute converted_vec_a_add_alpha = source_add_converter(vec_a_add_alpha);
     //FragmentCompute converted_vec_b_add_alpha = source_add_converter(vec_b_add_alpha);
     FragmentCompute converted_accumulator = accumulator_converter(accumulator);
 
-    FragmentCompute result;
-    torch::Half *result_ptr = reinterpret_cast<torch::Half *>(&result);
-    const torch::Half *source_ptr =
-        reinterpret_cast<const torch::Half *>(&converted_source);
-    const torch::Half *acc_ptr =
-        reinterpret_cast<const torch::Half *>(&converted_accumulator);
-    const torch::Half *row_vec_ptr =
-        reinterpret_cast<const torch::Half *>(&converted_row_vec_alpha);
-    const torch::Half *col_vec_ptr =
-        reinterpret_cast<const torch::Half *>(&converted_col_vec_alpha);
-    const float *vec_a_add_ptr =
-        reinterpret_cast<const float *>(&vec_a_add_alpha);
-    const float *vec_b_add_ptr =
-        reinterpret_cast<const float *>(&vec_b_add_alpha);
+    FragmentOutput result;
+    cutlass::bfloat16_t *result_ptr = reinterpret_cast<cutlass::bfloat16_t *>(&result);
+
+    //const cutlass::bfloat16_t *source_ptr =
+    //    reinterpret_cast<const cutlass::bfloat16_t *>(&converted_source);
+    const cutlass::half_t *acc_ptr =
+        reinterpret_cast<const cutlass::half_t *>(&converted_accumulator);
+
+    //const cutlass::bfloat16_t *row_vec_ptr =
+    //    reinterpret_cast<const cutlass::bfloat16_t *>(&row_vec_alpha);
+    //const cutlass::bfloat16_t *col_vec_ptr =
+    //    reinterpret_cast<const cutlass::bfloat16_t *>(&col_vec_alpha);
+    const int32_t *vec_a_add_ptr =
+        reinterpret_cast<const int32_t *>(&vec_a_add_alpha);
+    const int32_t *vec_b_add_ptr =
+        reinterpret_cast<const int32_t *>(&vec_b_add_alpha);
+
+    /* if(!blockIdx.x && !blockIdx.y && !blockIdx.z && !threadIdx.x && !threadIdx.y && !threadIdx.z) {
+      printf("%.2f\n", static_cast<float>(acc_ptr[0]));
+    } */
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < kCount; ++i) {
-      //result_ptr[i] = (2 * acc_ptr[i] + __float2half(vec_a_add_ptr[i]) + __float2half(vec_b_add_ptr[i])) * .5 * col_vec_ptr[i] * row_vec_ptr[i] + beta_ * source_ptr[i];
-      result_ptr[i] = __float2half( (2 * __half2float(acc_ptr[i]) + vec_a_add_ptr[i] + vec_b_add_ptr[i]) * .5 * __half2float(col_vec_ptr[i]) * __half2float(row_vec_ptr[i]) );
+      float tmp = (2 * static_cast<float>(acc_ptr[i])
+                  + vec_a_add_ptr[i]
+                  + vec_b_add_ptr[i]) *
+                  .5 * static_cast<float>(col_vec_alpha[i]) *
+                  static_cast<float>(row_vec_alpha[i]);
+
+      /* if(!blockIdx.x && !blockIdx.y && !blockIdx.z && threadIdx.x==0 && !threadIdx.y && !threadIdx.z && i==2) {
+        printf("%.4f -> %.4f\n", __bfloat162float(acc_ptr[i]), static_cast<float>(tmp));
+      } */
+
+      result_ptr[i] = (cutlass::bfloat16_t) __float2bfloat16_rn(tmp);
+      //result_ptr[i] = __float2half(tmp);
     }
 
-    return destination_converter(result);
+   //return destination_converter(result);
+   return result;
   }
 };
 
