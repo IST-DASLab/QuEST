@@ -7,7 +7,9 @@
 
 QuEST is a Quantization-Aware Training (QAT) method that allows stable training of 1-bit Llama-type LLMs, and makes 4-bit training Pareto-optimal.
 
-**[UPDATE 30.05.25]: QuEST has been accepted to ICML2025**
+**[UPDATE 30.05.25]:** Kernels code updated for ease of installation and benchmarking.
+
+**[UPDATE 01.05.25]:** QuEST has been accepted to ICML2025!
 
 ## Quickstart 
 
